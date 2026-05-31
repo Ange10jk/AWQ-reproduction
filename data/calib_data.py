@@ -6,60 +6,79 @@ from dataclasses import dataclass # generates class template automatically
 from typing import List 
 
 import torch
-from datasets import load_dataset 
+from datasets import load_dataset
 from transformers import PreTrainedTokenizer
 
 @dataclass
 class CalibSample:
-    text: str
-    input_ids: torch.Tensor | None = None
- 
+    input_ids: torch.Tensor
+
 
 def get_calib_dataset(
     dataset_name: str,
-    tokenizer : PreTrainedTokenizer | None = None,
+    tokenizer: PreTrainedTokenizer | None = None,
     num_samples: int = 512,
     seq_len: int = 512,
     seed: int = 42,
 ) -> List[CalibSample]:
     """Build calibration samples for AWQ.
 
-    - Load dataset (e.g., WikiText-2 subset) with deterministic seed.
-    - Tokenize and truncate to `seq_len`.
-    - Return representative text samples for activation collection.
+    Supported datasets:
+    - ``pileval``: Pile validation backup (official AWQ default), concat then split by ``seq_len``.
     """
-    if dataset_name.lower() == 'wikitext':
-        dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    elif dataset_name.lower() == 'pileval':
-        dataset = load_dataset('mit-han-lab/pile-val-backup', split='validation')
-    else:
-        raise NotImplementedError
-    # Please note the way Hugging face datasets are arranged
-    dataset = dataset.filter(lambda x: len(x['text'].strip() > 0))
+    if tokenizer is None:
+        raise ValueError("tokenizer is required for calibration dataset construction")
+
+    name = dataset_name.lower()
+    if name == "pileval":
+        return _build_pileval_samples(tokenizer, num_samples, seq_len, seed)
+
+    raise NotImplementedError(
+        f"Unsupported calibration dataset: {dataset_name!r}. "
+        "Choose from: wikitext, wikitext2, pileval."
+    )
+
+
+def _build_pileval_samples(
+    tokenizer: PreTrainedTokenizer,
+    num_samples: int,
+    seq_len: int,
+    seed: int,
+) -> List[CalibSample]:
+    dataset = load_dataset("mit-han-lab/pile-val-backup", split="validation")
     dataset = dataset.shuffle(seed=seed)
-    
+
+    encoded_lines: List[torch.Tensor] = []
+    for row in dataset:
+        line = row["text"].strip()
+        if not line:
+            continue
+        line_encoded = tokenizer.encode(line)
+        if len(line_encoded) > seq_len:
+            continue
+        encoded_lines.append(torch.tensor([line_encoded]))
+        if len(encoded_lines) == num_samples:
+            break
+
+    if not encoded_lines:
+        raise RuntimeError("No valid Pileval lines found for calibration.")
+
+    cat_samples = torch.cat(encoded_lines, dim=1)
+    n_split = cat_samples.shape[1] // seq_len
+    if n_split == 0:
+        raise RuntimeError(
+            f"Not enough Pileval tokens to form one block of seq_len={seq_len}."
+        )
+
+    print(f" * Split Pileval into {n_split} blocks with seq_len={seq_len}...")
     samples = []
-    max_samples = min(num_samples, len(dataset))
-
-    print(f" * Building {max_samples} calibration samples with seq_len={seq_len}...") 
-
-    for i in range(max_samples):
-        text = dataset[i]['text']
-
-        encoded = tokenizer(
-            text,
-            truncation=True,
-            padding="max_length",
-            max_length=seq_len,
-            return_tensors="pt",  # returns PyTorch Tensor
+    for i in range(n_split):
+        chunk = cat_samples[:, i * seq_len : (i + 1) * seq_len]
+        samples.append(
+            CalibSample(
+                input_ids=chunk,
+            )
         )
 
-        sample = CalibSample(
-            text=text,
-            input_ids=encoded['input_ids'],
-            attenion_mask=encoded['attention_masks'],
-        )
-        samples.append(sample)
-
-    print(f' * Successfully built {len(samples)} samples.')
+    print(f" * Successfully built {len(samples)} samples.")
     return samples
