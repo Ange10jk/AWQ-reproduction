@@ -1,12 +1,12 @@
 """Calibration dataset utilities."""
 
-from __future__ import annotations
+from __future__ import annotations # lazy compute
 
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass # generates class template automatically 
+from typing import List 
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset 
 from transformers import PreTrainedTokenizer
 
 @dataclass
