@@ -2,8 +2,10 @@
 
 Usage:
     python entry.py quantize --config configs/base.yaml
-    python entry.py eval --config configs/base.yaml
-
+    # 量化前
+    python entry.py eval --config configs/base.yaml 
+    # 量化后
+    python entry.py eval --config configs/eval_awq.yaml
 entry.py
   ├─ load_config(config_path)          # utils/config.py
   ├─ build_model_and_enc(cfg)          # utils/model.py（新建）
@@ -38,16 +40,20 @@ from eval.ppl import evaluate_ppl
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="myawq CLI")
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument(
         "--config",
         type=Path,
         default=Path("configs/base.yaml"),
         help="Path to yaml config file",
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("quantize", help="Run AWQ quantization pipeline")
-    subparsers.add_parser("eval", help="Run PPL evaluation")
+    subparsers.add_parser(
+        "quantize", parents=[shared], help="Run AWQ quantization pipeline"
+    )
+    subparsers.add_parser("eval", parents=[shared], help="Run PPL evaluation")
     return parser
 
 
