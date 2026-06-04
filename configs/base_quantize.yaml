@@ -1,0 +1,22 @@
+model:
+  name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  dtype: "float16"
+
+calibration:
+  dataset: "pileval" 
+  num_samples: 32
+  seq_len: 512
+  seed: 42
+
+awq:
+  n_bits: 4
+  group_size: 128
+  symmetric: false
+  auto_scale: true
+  auto_clip: true
+
+output:
+  dir: "results"
+  save_quant_ckpt: true # 保存伪量化模型
+  quant_ckpt_name: "TinyLlama_1.1b_fake_quant" # 相对 output.dir；eval 的 ckpt_path 需与此一致
+

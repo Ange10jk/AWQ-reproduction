@@ -1,0 +1,31 @@
+model:
+  name: "meta-llama/Llama-2-7b-hf"    
+  ckpt_path: "results/Llama2_7b_fake_quant" 
+  tokenizer: "results/Llama2_7b_fake_quant" 
+  dtype: "float16"
+
+calibration:
+  dataset: "pileval" 
+  num_samples: 32
+  seq_len: 512
+  seed: 42
+
+awq:
+  n_bits: 4
+  group_size: 128
+  symmetric: false
+  auto_scale: true
+  auto_clip: true
+
+
+evaluation:
+  dataset: "wikitext2"
+  split: "test"
+  batch_size: 1
+  max_length: 2048
+
+output:
+  dir: "results"
+  save_quant_ckpt: true # 保存伪量化模型
+  quant_ckpt_name: "Llama2_7b_fake_quant"
+  save_metrics: true

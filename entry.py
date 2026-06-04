@@ -1,14 +1,17 @@
 """Command line entrypoint for AWQ workflow.
 
 Usage:
-    python entry.py quantize --config configs/base.yaml
+    # awq 量化
+    python entry.py quantize --config configs/base_quantize.yaml
     # 量化前
-    python entry.py eval --config configs/base.yaml 
+    python entry.py eval --config configs/base_eval_fp16.yaml 
     # 量化后
-    python entry.py eval --config configs/eval_awq.yaml
+    python entry.py eval --config configs/base_eval_awq.yaml
+
+
 entry.py
   ├─ load_config(config_path)          # utils/config.py
-  ├─ build_model_and_enc(cfg)          # utils/model.py（新建）
+  ├─ build_model_and_enc(cfg)          # utils/model.py
   └─ 按 command 分发
        ├─ quantize → run_awq(model, enc, cfg)
        └─ eval     → evaluate_ppl(model, enc, cfg)
@@ -21,7 +24,7 @@ load config
 
 load config
 → build_model_and_enc()  # FP16 baseline
-→ 或 load 已量化 checkpoint（config 里加 quant_ckpt_path）
+→ 或 load 已量化 checkpoint
 → WikiText-2 test 滑窗算 PPL
 → 写入 results/metrics.json
     

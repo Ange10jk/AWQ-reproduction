@@ -1,0 +1,16 @@
+# fp16 baseline
+model:
+  name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  # 从 HF 拉取
+  ckpt_path: ""   
+  tokenizer: ""
+  dtype: "float16"
+
+evaluation:
+  dataset: "wikitext2"
+  split: "test"
+  max_length: 2048
+
+output:
+  dir: "results"
+  save_metrics: true
