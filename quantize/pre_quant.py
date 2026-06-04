@@ -41,6 +41,7 @@ class AwqRunConfig:
     seed: int
     output_dir: Path
     save_quant_ckpt: bool
+    quant_ckpt_name: str
 
     @classmethod # 类方法，不是对象方法
     def from_dict(cls, cfg: Dict[str, Any]) -> AwqRunConfig:
@@ -59,6 +60,7 @@ class AwqRunConfig:
             seed=int(calib.get("seed", 42)),
             output_dir=Path(output.get("dir", "results")),
             save_quant_ckpt=bool(output.get("save_quant_ckpt", True)),
+            quant_ckpt_name=str(output.get("quant_ckpt_name", "fake_quant_model")),
         )
 
 
@@ -310,7 +312,7 @@ class AwqPipeline:
             group_size=self.run_cfg.group_size,
             symmetric=self.run_cfg.symmetric,
         )
-        ckpt_dir = self.run_cfg.output_dir / "fake_quant_model"
+        ckpt_dir = self.run_cfg.output_dir / self.run_cfg.quant_ckpt_name
         self.model.save_pretrained(ckpt_dir)
         if save_tokenizer:
             self.tokenizer.save_pretrained(ckpt_dir)
