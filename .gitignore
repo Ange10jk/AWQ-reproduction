@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
-results/
+results/*_fake_quant
+results/*.pt
 *.safetensors
 .env
 docs/
+.ipynb_checkpoints/
+fusion_result.json
