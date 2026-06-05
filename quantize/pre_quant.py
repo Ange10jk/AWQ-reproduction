@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,27 @@ def get_named_linears(module: nn.Module) -> Dict[str, nn.Linear]:
     return {name: layer for name, layer in module.named_modules() if isinstance(layer, nn.Linear)}
 
 
+def _create_causal_mask_compat(
+    config: Any,
+    hidden: torch.Tensor,
+    cache_position: torch.Tensor,
+    position_ids: torch.Tensor,
+) -> torch.Tensor | None:
+    """Transformers 4.x uses input_embeds; 5.x renamed it to inputs_embeds."""
+    from transformers.masking_utils import create_causal_mask
+
+    params = inspect.signature(create_causal_mask).parameters
+    embed_kw = "inputs_embeds" if "inputs_embeds" in params else "input_embeds"
+    return create_causal_mask(
+        config=config,
+        attention_mask=None,
+        cache_position=cache_position,
+        past_key_values=None,
+        position_ids=position_ids,
+        **{embed_kw: hidden},
+    )
+
+
 def _refresh_layer_forward_kwargs(
     model: LlamaForCausalLM,
     hidden: torch.Tensor,
@@ -90,11 +112,9 @@ def _refresh_layer_forward_kwargs(
 ) -> Dict[str, Any]:
     """Rebuild RoPE/mask kwargs for the current hidden states.
 
-    Transformers 5.x computes `position_embeddings` from the current hidden
+    Transformers 4.x/5.x compute `position_embeddings` from the current hidden
     states. Reusing the tensors captured at layer 0 can break from layer 1 onward.
     """
-    from transformers.masking_utils import create_causal_mask
-
     device = hidden.device
     batch_size, seq_len = hidden.shape[:2]
 
@@ -114,13 +134,8 @@ def _refresh_layer_forward_kwargs(
     rotary_emb = model.model.rotary_emb.to(device)
     position_embeddings = rotary_emb(hidden, position_ids=position_ids)
 
-    causal_mask = create_causal_mask(
-        config=model.config,
-        inputs_embeds=hidden,
-        attention_mask=None,
-        cache_position=cache_position,
-        past_key_values=None,
-        position_ids=position_ids,
+    causal_mask = _create_causal_mask_compat(
+        model.config, hidden, cache_position, position_ids
     )
 
     return {
