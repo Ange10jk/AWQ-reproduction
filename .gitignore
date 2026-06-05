@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-results/awq_results.pt
-results/*_fake_quant/
+results/
 *.safetensors
 .env
+docs/

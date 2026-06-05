@@ -1,10 +1,12 @@
 model:
   name: "NousResearch/Llama-2-7b-hf"
   dtype: "float16"
+  device: npu
+  load_mode: quantize
   local_files_only: false
 
 calibration:
-  dataset: "pileval" 
+  dataset: "pileval"
   num_samples: 32
   seq_len: 512
   seed: 42
@@ -18,6 +20,5 @@ awq:
 
 output:
   dir: "results"
-  save_quant_ckpt: true # 保存伪量化模型
-  quant_ckpt_name: "Llama2_7b_fake_quant" # 相对 output.dir；eval 的 ckpt_path 需与此一致
-
+  save_quant_ckpt: true
+  quant_ckpt_name: "Llama2_7b_fake_quant"

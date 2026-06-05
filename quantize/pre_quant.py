@@ -18,6 +18,7 @@ from data.calib_data import get_calib_dataset
 from quantize.auto_clip import ClipRecord, apply_clip_records, optimize_decoder_layer_clips
 from quantize.auto_scale import ScaleRecord, apply_scale_records, optimize_decoder_layer_scales
 from quantize.quantizer import pseudo_quantize_model_weight
+from utils.device import empty_cache, require_accelerator, to_accelerator, to_cpu
 
 __all__ = [
     "run_awq",
@@ -218,14 +219,12 @@ class AwqPipeline:
     ):
         self.model = model
         self.tokenizer = tokenizer
+        self.cfg = cfg
         self.run_cfg = AwqRunConfig.from_dict(cfg)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if self.device.type != "cuda":
-            raise RuntimeError("AWQ calibration requires CUDA.")
+        self.device = require_accelerator(cfg)
 
-    def _free_cuda_cache(self) -> None:
-        gc.collect()
-        torch.cuda.empty_cache()
+    def _free_device_cache(self) -> None:
+        empty_cache()
 
     def _load_calibration_batch(self) -> torch.Tensor:
         samples = get_calib_dataset(
@@ -240,15 +239,15 @@ class AwqPipeline:
 
     def _prefill_hidden_states(self, calib_batch: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, Any]]:
         layers = get_blocks(self.model)
-        layers[0] = layers[0].cuda()
+        layers[0] = to_accelerator(layers[0], self.cfg)
         move_embed(self.model, self.device)
 
         with capture_layer0_inputs(self.model, layers[0], calib_batch) as (hidden, kwargs):
             pass
 
-        layers[0] = layers[0].cpu()
+        layers[0] = to_cpu(layers[0])
         move_embed(self.model, "cpu")
-        self._free_cuda_cache()
+        self._free_device_cache()
         return hidden, kwargs # layer 0 
     
     def _process_layer(
@@ -257,7 +256,7 @@ class AwqPipeline:
         hidden: torch.Tensor,
         layer_kwargs: Dict[str, Any],
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], List[ScaleRecord], List[ClipRecord]]:
-        layer = layer.cuda()
+        layer = to_accelerator(layer, self.cfg)
         linears = get_named_linears(layer)
 
         hidden = hidden.to(next(layer.parameters()).device)
@@ -287,10 +286,11 @@ class AwqPipeline:
                 n_bits=self.run_cfg.n_bits,
                 group_size=self.run_cfg.group_size,
                 symmetric=self.run_cfg.symmetric,
+                device=self.device,
             )
 
-        layer.cpu()
-        self._free_cuda_cache()
+        layer = to_cpu(layer)
+        self._free_device_cache()
         return hidden.detach().cpu(), input_feat, scale_records, clip_records
 
     def _persist_results(
@@ -361,4 +361,4 @@ def apply_awq(model: PreTrainedModel, awq_results: Dict[str, Any]) -> None:
         if entry.get("scales"):
             apply_scale_records(layer, entry["scales"])
         if entry.get("clips"):
-            apply_clip_records(layer, entry["clips"])
+            apply_clip_records(layer, entry["clips"], device=torch.device("cpu"))

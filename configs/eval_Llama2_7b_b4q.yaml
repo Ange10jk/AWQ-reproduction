@@ -1,11 +1,12 @@
-# fp16 baseline (pre-AWQ)
+# FP16 baseline (pre-AWQ) on Ascend NPU
 model:
-  # meta-llama/Llama-2-7b-hf 需在 HF 页面同意 Meta 协议；未获批前用同权重镜像
   name: "NousResearch/Llama-2-7b-hf"
   ckpt_path: ""
   tokenizer: ""
   dtype: "float16"
-  local_files_only: false  # 权重已缓存
+  device: npu
+  load_mode: eval
+  local_files_only: false
 
 evaluation:
   dataset: "wikitext2"

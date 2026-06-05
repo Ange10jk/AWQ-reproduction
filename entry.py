@@ -1,44 +1,34 @@
 """Command line entrypoint for AWQ workflow.
 
 Usage:
-    # awq 量化
     python entry.py quantize --config configs/base_quantize.yaml
     # 量化前
     python entry.py eval --config configs/base_eval_fp16.yaml 
     # 量化后
     python entry.py eval --config configs/base_eval_awq.yaml
 
-
-entry.py
-  ├─ load_config(config_path)          # utils/config.py
-  ├─ build_model_and_enc(cfg)          # utils/model.py
-  └─ 按 command 分发
-       ├─ quantize → run_awq(model, enc, cfg)
-       └─ eval     → evaluate_ppl(model, enc, cfg)
-
-load config
-→ build_model_and_enc()
-→ run_awq(model, enc, w_bit, q_config, calib_samples...)
-→ apply_awq() + pseudo_quantize_model_weight()  # 在 pre_quant 里完成
-→ 保存 awq_results.pt / fake-quant checkpoint 到 results/
-
-load config
-→ build_model_and_enc()  # FP16 baseline
-→ 或 load 已量化 checkpoint
-→ WikiText-2 test 滑窗算 PPL
-→ 写入 results/metrics.json
-    
-    """
+Huawei Ascend NPU (huawei branch):
+    python entry.py quantize --config configs/quantize_awq_Llama2_7b.yaml
+    python entry.py eval --config configs/eval_Llama2_7b_b4q.yaml
+"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any, Dict
 
 from utils.config import load_config
+from utils.device import device_label, init_npu_backend
 from utils.model import build_model_and_enc
 from quantize.pre_quant import run_awq
 from eval.ppl import evaluate_ppl
+
+
+def _ensure_load_mode(cfg: Dict[str, Any], command: str) -> None:
+    model_cfg = cfg.setdefault("model", {})
+    if "load_mode" not in model_cfg:
+        model_cfg["load_mode"] = "quantize" if command == "quantize" else "eval"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     shared.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/base.yaml"),
+        default=Path("configs/base_quantize.yaml"),
         help="Path to yaml config file",
     )
 
@@ -61,8 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    init_npu_backend()
     args = build_parser().parse_args()
     cfg = load_config(args.config)
+    _ensure_load_mode(cfg, args.command)
+    print(f"[myawq] Using accelerator: {device_label(cfg)}")
     model, enc = build_model_and_enc(cfg)
 
     if args.command == "quantize":

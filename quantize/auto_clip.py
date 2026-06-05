@@ -11,6 +11,7 @@ import torch.nn as nn
 
 from quantize.auto_scale import resolve_submodule
 from quantize.quantizer import pseudo_quantize_tensor
+from utils.device import empty_cache
 
 __all__ = ["ClipRecord", "apply_clip_records", "optimize_decoder_layer_clips"]
 
@@ -36,11 +37,11 @@ def _search_linear_clip(
 ) -> torch.Tensor:
     assert weight.dim() == 2
     flat_input = input_feat.reshape(-1, input_feat.shape[-1])
-    flat_input = flat_input.reshape(1, flat_input.shape[0], -1, group_size)# [1, n_tokens, n_group, group_size]
+    flat_input = flat_input.reshape(1, flat_input.shape[0], -1, group_size)
     stride = max(1, flat_input.shape[1] // n_sample_token)
-    flat_input = flat_input[:, ::stride] # [1, n_token', n_group, group_size]
+    flat_input = flat_input[:, ::stride]
 
-    grouped_weight = weight.reshape(weight.shape[0], 1, -1, group_size)# [co, 1, n_group, group_size]
+    grouped_weight = weight.reshape(weight.shape[0], 1, -1, group_size)
     batch_size = 256 if grouped_weight.shape[0] % 256 == 0 else 64
     if grouped_weight.shape[0] % batch_size != 0:
         raise ValueError(
@@ -50,18 +51,17 @@ def _search_linear_clip(
     best_vals: List[torch.Tensor] = []
     flat_input = flat_input.to(grouped_weight.device)
 
-    for start in range(0, grouped_weight.shape[0], batch_size):# every batch_sz of o_channels
-        chunk = grouped_weight[start : start + batch_size] # [b_size, 1, n_group, group_size]
-        #  误差累加用float32，因为FP16最大也表示不了1e9
+    for start in range(0, grouped_weight.shape[0], batch_size):
+        chunk = grouped_weight[start : start + batch_size]
         chunk_fp32 = chunk.float()
         input_fp32 = flat_input.float()
 
-        org_max = chunk_fp32.abs().amax(dim=-1, keepdim=True)   
+        org_max = chunk_fp32.abs().amax(dim=-1, keepdim=True)
         best_max = org_max.to(dtype=chunk.dtype)
         min_err = torch.full(
             org_max.shape, 1e9, device=org_max.device, dtype=torch.float32
-        )# [b_size, 1, n_group, 1]
-        org_out = (input_fp32 * chunk_fp32).sum(dim=-1) # [b_size, n_token', n_group]
+        )
+        org_out = (input_fp32 * chunk_fp32).sum(dim=-1)
 
         for step in range(int(max_shrink * n_grid)):
             max_val = org_max * (1 - step / n_grid)
@@ -86,21 +86,25 @@ def _search_linear_clip(
     result = torch.cat(best_vals, dim=0).squeeze(1)
     del flat_input
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
     return result
 
 
 @torch.no_grad()
-def apply_clip_records(layer: nn.Module, records: List[ClipRecord]) -> None:
+def apply_clip_records(
+    layer: nn.Module,
+    records: List[ClipRecord],
+    device: torch.device,
+) -> None:
     for record in records:
         linear = resolve_submodule(layer, record.linear_path)
-        linear.cuda()
+        linear.to(device)
         max_val = record.max_val.to(linear.weight.device, dtype=linear.weight.dtype)
         org_shape = linear.weight.shape
         reshaped = linear.weight.data.reshape(*max_val.shape[:2], -1)
-        # pseudo_clip
         linear.weight.data = torch.clamp(reshaped, -max_val, max_val).reshape(org_shape)
-        linear.cpu()
+        linear.to("cpu")
+
 
 @torch.no_grad()
 def optimize_decoder_layer_clips(
@@ -109,6 +113,7 @@ def optimize_decoder_layer_clips(
     n_bits: int,
     group_size: int,
     symmetric: bool,
+    device: torch.device,
 ) -> List[ClipRecord]:
     records: List[ClipRecord] = []
     for name, module in layer.named_modules():
@@ -125,7 +130,7 @@ def optimize_decoder_layer_clips(
             symmetric=symmetric,
         )
         record = ClipRecord(linear_path=name, max_val=max_val.detach().cpu())
-        apply_clip_records(layer, [record])
+        apply_clip_records(layer, [record], device=device)
         records.append(record)
 
     return records

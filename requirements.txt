@@ -1,4 +1,4 @@
-# PyTorch: install separately via conda (e.g. conda install pytorch).
+# PyTorch: install separately (conda on CUDA, preinstalled in CANN notebook on NPU).
 transformers>=4.36
 accelerate
 datasets
