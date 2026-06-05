@@ -1,0 +1,9 @@
+# PyTorch: install separately via conda (e.g. conda install pytorch).
+transformers>=4.36
+accelerate
+datasets
+huggingface_hub
+PyYAML
+tqdm
+zstandard
+

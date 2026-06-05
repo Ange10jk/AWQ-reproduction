@@ -1,8 +1,9 @@
+# fp16 baseline (pre-AWQ)
 model:
   # meta-llama/Llama-2-7b-hf 需在 HF 页面同意 Meta 协议；未获批前用同权重镜像
   name: "NousResearch/Llama-2-7b-hf"
-  ckpt_path: "results/Llama2_7b_fake_quant"
-  tokenizer: "results/Llama2_7b_fake_quant"
+  ckpt_path: ""
+  tokenizer: ""
   dtype: "float16"
   local_files_only: false  # 权重已缓存
 
