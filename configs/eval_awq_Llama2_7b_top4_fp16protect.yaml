@@ -1,7 +1,7 @@
 model:
   name: "NousResearch/Llama-2-7b-hf"
-  ckpt_path: "results/Llama2_7b_fake_quant"
-  tokenizer: "results/Llama2_7b_fake_quant"
+  ckpt_path: "results/Llama2_7b_awq_top4_fp16protect"
+  tokenizer: "results/Llama2_7b_awq_top4_fp16protect"
   dtype: "float16"
   device: npu
   load_mode: eval
@@ -15,4 +15,4 @@ evaluation:
 output:
   dir: "results"
   save_metrics: true
-  metrics_name: "ppl_metrics_Llama2_7b_awq.json"
+  metrics_name: "ppl_metrics_Llama2_7b_awq_top4_fp16protect.json"

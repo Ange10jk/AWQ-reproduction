@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import inspect
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,7 @@ from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from data.calib_data import get_calib_dataset
 from quantize.auto_clip import ClipRecord, apply_clip_records, optimize_decoder_layer_clips
 from quantize.auto_scale import ScaleRecord, apply_scale_records, optimize_decoder_layer_scales
-from quantize.quantizer import pseudo_quantize_model_weight
+from quantize.quantizer import pseudo_quantize_tensor
 from utils.device import empty_cache, require_accelerator, to_accelerator, to_cpu
 
 __all__ = [
@@ -44,12 +45,19 @@ class AwqRunConfig:
     output_dir: Path
     save_quant_ckpt: bool
     quant_ckpt_name: str
+    mixed_precision: str
+    topk: int
 
     @classmethod # 类方法，不是对象方法
     def from_dict(cls, cfg: Dict[str, Any]) -> AwqRunConfig:
         calib = cfg.get("calibration", {})
         awq = cfg.get("awq", {})
         output = cfg.get("output", {})
+        mixed_precision = str(awq.get("mixed_precision", "none")).lower()
+        if mixed_precision not in {"none", "fp16", "int8"}:
+            raise ValueError(
+                "awq.mixed_precision must be one of: none | fp16 | int8"
+            )
         return cls(
             n_bits=int(awq.get("n_bits", 4)),
             group_size=int(awq.get("group_size", 128)),
@@ -63,6 +71,8 @@ class AwqRunConfig:
             output_dir=Path(output.get("dir", "results")),
             save_quant_ckpt=bool(output.get("save_quant_ckpt", True)),
             quant_ckpt_name=str(output.get("quant_ckpt_name", "fake_quant_model")),
+            mixed_precision=mixed_precision,
+            topk=max(0, int(awq.get("topk", 0))),
         )
 
 
@@ -270,15 +280,15 @@ class AwqPipeline:
         layer: nn.Module,
         hidden: torch.Tensor,
         layer_kwargs: Dict[str, Any],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], List[ScaleRecord], List[ClipRecord]]:
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], List[ScaleRecord], List[ClipRecord], float]:
         layer = to_accelerator(layer, self.cfg)
         linears = get_named_linears(layer)
 
-        hidden = hidden.to(next(layer.parameters()).device)
-        forward_kwargs = _refresh_layer_forward_kwargs(self.model, hidden, layer_kwargs)
+        layer_input = hidden.to(next(layer.parameters()).device)
+        forward_kwargs = _refresh_layer_forward_kwargs(self.model, layer_input, layer_kwargs)
 
         with LinearActivationRecorder(linears) as recorder:
-            hidden = _extract_hidden_states(layer(hidden, **forward_kwargs))
+            _extract_hidden_states(layer(layer_input, **forward_kwargs))
 
         input_feat = recorder.consolidated()
         scale_records: List[ScaleRecord] = []
@@ -304,9 +314,82 @@ class AwqPipeline:
                 device=self.device,
             )
 
+        hidden = _extract_hidden_states(layer(layer_input, **forward_kwargs))
+        output_mse = self._estimate_layer_output_mse(
+            layer,
+            linears,
+            layer_input,
+            forward_kwargs,
+            hidden,
+        )
+
         layer = to_cpu(layer)
         self._free_device_cache()
-        return hidden.detach().cpu(), input_feat, scale_records, clip_records
+        return hidden.detach().cpu(), input_feat, scale_records, clip_records, output_mse
+
+    @torch.no_grad()
+    def _estimate_layer_output_mse(
+        self,
+        layer: nn.Module,
+        linears: Dict[str, nn.Linear],
+        layer_input: torch.Tensor,
+        forward_kwargs: Dict[str, Any],
+        fp_output: torch.Tensor,
+    ) -> float:
+        backups: Dict[str, torch.Tensor] = {}
+        for name, linear in linears.items():
+            backups[name] = linear.weight.data.detach().clone()
+            qweight = pseudo_quantize_tensor(
+                linear.weight.data,
+                n_bits=self.run_cfg.n_bits,
+                group_size=self.run_cfg.group_size,
+                symmetric=self.run_cfg.symmetric,
+                inplace=False,
+            ).qweight
+            linear.weight.data.copy_(qweight)
+
+        quant_output = _extract_hidden_states(layer(layer_input, **forward_kwargs))
+        mse = torch.mean((fp_output.float() - quant_output.float()) ** 2).item()
+
+        for name, linear in linears.items():
+            linear.weight.data.copy_(backups[name])
+        return float(mse)
+
+    @staticmethod
+    def _select_topk_layers_by_mse(awq_results: Dict[str, Any], topk: int) -> List[int]:
+        if topk <= 0:
+            return []
+        ranked = sorted(
+            (
+                (int(entry["index"]), float(entry.get("output_mse", 0.0)))
+                for entry in awq_results.get("layers", [])
+            ),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        return [idx for idx, _ in ranked[:topk]]
+
+    @torch.no_grad()
+    def _apply_mixed_precision_quant(
+        self,
+        protected_layers: List[int],
+    ) -> None:
+        protected_set = set(protected_layers)
+        mode = self.run_cfg.mixed_precision
+
+        for layer_idx, layer in enumerate(get_blocks(self.model)):
+            if layer_idx in protected_set and mode == "fp16":
+                continue
+            bit_width = 8 if (layer_idx in protected_set and mode == "int8") else self.run_cfg.n_bits
+            for linear in get_named_linears(layer).values():
+                qweight = pseudo_quantize_tensor(
+                    linear.weight.data,
+                    n_bits=bit_width,
+                    group_size=self.run_cfg.group_size,
+                    symmetric=self.run_cfg.symmetric,
+                    inplace=False,
+                ).qweight
+                linear.weight.data.copy_(qweight)
 
     def _persist_results(
         self,
@@ -321,12 +404,43 @@ class AwqPipeline:
         if not self.run_cfg.save_quant_ckpt:
             return
 
-        pseudo_quantize_model_weight(
-            self.model,
-            n_bits=self.run_cfg.n_bits,
-            group_size=self.run_cfg.group_size,
-            symmetric=self.run_cfg.symmetric,
+        protected_layers = (
+            self._select_topk_layers_by_mse(awq_results, self.run_cfg.topk)
+            if self.run_cfg.mixed_precision != "none"
+            else []
         )
+        self._apply_mixed_precision_quant(protected_layers)
+
+        selected = [
+            {
+                "index": idx,
+                "output_mse": next(
+                    float(entry.get("output_mse", 0.0))
+                    for entry in awq_results["layers"]
+                    if int(entry["index"]) == idx
+                ),
+            }
+            for idx in protected_layers
+        ]
+        plan = {
+            "base_bits": self.run_cfg.n_bits,
+            "group_size": self.run_cfg.group_size,
+            "symmetric": self.run_cfg.symmetric,
+            "mixed_precision": self.run_cfg.mixed_precision,
+            "topk": self.run_cfg.topk,
+            "protected_layers": selected,
+        }
+        plan_path = self.run_cfg.output_dir / "mixed_precision_plan.json"
+        with plan_path.open("w", encoding="utf-8") as f:
+            json.dump(plan, f, indent=2)
+        if protected_layers:
+            print(
+                f"[myawq] Mixed precision mode={self.run_cfg.mixed_precision}, "
+                f"topk={self.run_cfg.topk}, layers={protected_layers}"
+            )
+        else:
+            print("[myawq] Mixed precision disabled (uniform quantization).")
+
         ckpt_dir = self.run_cfg.output_dir / self.run_cfg.quant_ckpt_name
         self.model.save_pretrained(ckpt_dir)
         if save_tokenizer:
@@ -342,7 +456,7 @@ class AwqPipeline:
         layers = get_blocks(self.model)
 
         for layer_idx in tqdm.tqdm(range(len(layers)), desc="Running AWQ"):
-            hidden, _, scale_records, clip_records = self._process_layer(
+            hidden, _, scale_records, clip_records, output_mse = self._process_layer(
                 layers[layer_idx],
                 hidden,
                 layer_kwargs,
@@ -352,6 +466,7 @@ class AwqPipeline:
                     "index": layer_idx,
                     "scales": scale_records,
                     "clips": clip_records,
+                    "output_mse": output_mse,
                 }
             )
 

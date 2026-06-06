@@ -18,9 +18,9 @@ awq:
   auto_scale: true
   auto_clip: true
   mixed_precision: fp16
-  topk: 0
+  topk: 8
 
 output:
   dir: "results"
   save_quant_ckpt: true
-  quant_ckpt_name: "Llama2_7b_fake_quant"
+  quant_ckpt_name: "Llama2_7b_awq_top8_fp16protect"

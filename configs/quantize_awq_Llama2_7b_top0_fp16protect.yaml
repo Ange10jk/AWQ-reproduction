@@ -23,4 +23,4 @@ awq:
 output:
   dir: "results"
   save_quant_ckpt: true
-  quant_ckpt_name: "Llama2_7b_fake_quant"
+  quant_ckpt_name: "Llama2_7b_awq_top0_fp16protect"
