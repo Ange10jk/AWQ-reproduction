@@ -1,0 +1,41 @@
+{
+  "base_bits": 4,
+  "group_size": 128,
+  "symmetric": false,
+  "mixed_precision": "fp16",
+  "topk": 8,
+  "protected_layers": [
+    {
+      "index": 31,
+      "output_mse": 0.013188231736421585
+    },
+    {
+      "index": 30,
+      "output_mse": 0.007801828905940056
+    },
+    {
+      "index": 29,
+      "output_mse": 0.003787057939916849
+    },
+    {
+      "index": 28,
+      "output_mse": 0.003278590738773346
+    },
+    {
+      "index": 27,
+      "output_mse": 0.002660543192178011
+    },
+    {
+      "index": 26,
+      "output_mse": 0.0024819173850119114
+    },
+    {
+      "index": 25,
+      "output_mse": 0.002152737695723772
+    },
+    {
+      "index": 24,
+      "output_mse": 0.0019199511734768748
+    }
+  ]
+}
