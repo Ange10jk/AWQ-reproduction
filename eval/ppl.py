@@ -73,7 +73,8 @@ def evaluate_ppl(
     if output_cfg.get("save_metrics", True):
         output_dir = Path(output_cfg.get("dir", "results"))
         output_dir.mkdir(parents=True, exist_ok=True)
-        metrics_path = output_dir / "ppl_metrics.json"
+        metrics_name = output_cfg.get("metrics_name", "ppl_metrics.json")
+        metrics_path = output_dir / metrics_name
         with metrics_path.open("w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"[myawq] Saved PPL metrics to: {metrics_path}")

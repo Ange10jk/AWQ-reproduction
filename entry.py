@@ -2,14 +2,17 @@
 
 Usage:
     python entry.py quantize --config configs/base_quantize.yaml
+    python entry.py quantize_rtn --config configs/quantize_rtn_Llama2_7b.yaml
     # 量化前
-    python entry.py eval --config configs/base_eval_fp16.yaml 
+    python entry.py eval --config configs/base_eval_fp16.yaml
     # 量化后
     python entry.py eval --config configs/base_eval_awq.yaml
 
 Huawei Ascend NPU (huawei branch):
     python entry.py quantize --config configs/quantize_awq_Llama2_7b.yaml
+    python entry.py quantize_rtn --config configs/quantize_rtn_Llama2_7b.yaml
     python entry.py eval --config configs/eval_Llama2_7b_b4q.yaml
+    python entry.py eval --config configs/eval_Llama2_7b_RTN.yaml
 """
 
 from __future__ import annotations
@@ -22,13 +25,16 @@ from utils.config import load_config
 from utils.device import device_label, init_npu_backend
 from utils.model import build_model_and_enc
 from quantize.pre_quant import run_awq
+from quantize.rtn import run_rtn
 from eval.ppl import evaluate_ppl
 
 
 def _ensure_load_mode(cfg: Dict[str, Any], command: str) -> None:
     model_cfg = cfg.setdefault("model", {})
     if "load_mode" not in model_cfg:
-        model_cfg["load_mode"] = "quantize" if command == "quantize" else "eval"
+        model_cfg["load_mode"] = (
+            "quantize" if command in {"quantize", "quantize_rtn"} else "eval"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "quantize", parents=[shared], help="Run AWQ quantization pipeline"
     )
+    subparsers.add_parser(
+        "quantize_rtn",
+        parents=[shared],
+        help="Run naive RTN fake-quant baseline (no AWQ search)",
+    )
     subparsers.add_parser("eval", parents=[shared], help="Run PPL evaluation")
     return parser
 
@@ -60,6 +71,8 @@ def main() -> None:
 
     if args.command == "quantize":
         run_awq(model, enc, cfg)
+    elif args.command == "quantize_rtn":
+        run_rtn(model, enc, cfg)
     elif args.command == "eval":
         evaluate_ppl(model, enc, cfg)
     else:

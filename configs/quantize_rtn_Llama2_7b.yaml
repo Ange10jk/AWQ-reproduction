@@ -1,0 +1,16 @@
+model:
+  name: "NousResearch/Llama-2-7b-hf"
+  dtype: "float16"
+  device: npu
+  load_mode: quantize
+  local_files_only: false
+
+awq:
+  n_bits: 4
+  group_size: 128
+  symmetric: false
+
+output:
+  dir: "results"
+  save_quant_ckpt: true
+  quant_ckpt_name: "Llama2_7b_rtn_fake_quant"

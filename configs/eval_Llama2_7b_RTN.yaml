@@ -1,0 +1,18 @@
+model:
+  name: "NousResearch/Llama-2-7b-hf"
+  ckpt_path: "results/Llama2_7b_rtn_fake_quant"
+  tokenizer: "results/Llama2_7b_rtn_fake_quant"
+  dtype: "float16"
+  device: npu
+  load_mode: eval
+  local_files_only: false
+
+evaluation:
+  dataset: "wikitext2"
+  split: "test"
+  max_length: 2048
+
+output:
+  dir: "results"
+  save_metrics: true
+  metrics_name: "ppl_metrics_Llama2_7b_rtn.json"
