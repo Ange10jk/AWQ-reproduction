@@ -314,6 +314,11 @@ class AwqPipeline:
                 device=self.device,
             )
 
+        # scale/clip search may leave submodules on CPU; re-sync before forward.
+        layer = to_accelerator(layer, self.cfg)
+        layer_input = layer_input.to(self.device)
+        forward_kwargs = _refresh_layer_forward_kwargs(self.model, layer_input, layer_kwargs)
+
         hidden = _extract_hidden_states(layer(layer_input, **forward_kwargs))
         output_mse = self._estimate_layer_output_mse(
             layer,

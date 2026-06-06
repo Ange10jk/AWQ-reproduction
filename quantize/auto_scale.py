@@ -94,10 +94,13 @@ def _search_best_scales(
             symmetric=symmetric,
         ).qweight
 
+    device = next(inspect_module.parameters()).device
     kwargs = dict(forward_kwargs)
     kwargs.pop("use_cache", None)
+    for key, value in list(kwargs.items()):
+        if torch.is_tensor(value):
+            kwargs[key] = value.to(device)
 
-    device = next(inspect_module.parameters()).device
     activations = activations.to(device)
 
     # output baseline
@@ -109,7 +112,8 @@ def _search_best_scales(
     act_scale = _activation_scale(activations)
     best_error = float("inf")
     best_scales: torch.Tensor | None = None
-    original_state = {k: v.detach().cpu() for k, v in inspect_module.state_dict().items()}
+    # Keep backup on the same device; loading CPU tensors would leave weights on CPU.
+    original_state = {k: v.detach().clone() for k, v in inspect_module.state_dict().items()}
 
     for step in range(n_grid):
         ratio = step / n_grid

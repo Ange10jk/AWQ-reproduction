@@ -94,16 +94,16 @@ def _search_linear_clip(
 def apply_clip_records(
     layer: nn.Module,
     records: List[ClipRecord],
-    device: torch.device,
+    device: torch.device | None = None,
 ) -> None:
     for record in records:
         linear = resolve_submodule(layer, record.linear_path)
-        linear.to(device)
+        if device is not None and linear.weight.device != device:
+            linear.to(device)
         max_val = record.max_val.to(linear.weight.device, dtype=linear.weight.dtype)
         org_shape = linear.weight.shape
         reshaped = linear.weight.data.reshape(*max_val.shape[:2], -1)
         linear.weight.data = torch.clamp(reshaped, -max_val, max_val).reshape(org_shape)
-        linear.to("cpu")
 
 
 @torch.no_grad()
