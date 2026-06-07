@@ -37,10 +37,12 @@ def _search_linear_clip(
 ) -> torch.Tensor:
     assert weight.dim() == 2
     flat_input = input_feat.reshape(-1, input_feat.shape[-1])
+    # [1, n_token, n_group, group_sz]
     flat_input = flat_input.reshape(1, flat_input.shape[0], -1, group_size)
     stride = max(1, flat_input.shape[1] // n_sample_token)
+    # [1, n_token', n_group, group_sz]
     flat_input = flat_input[:, ::stride]
-
+    # [co, 1, n_group, group_sz]
     grouped_weight = weight.reshape(weight.shape[0], 1, -1, group_size)
     batch_size = 256 if grouped_weight.shape[0] % 256 == 0 else 64
     if grouped_weight.shape[0] % batch_size != 0:
@@ -53,8 +55,8 @@ def _search_linear_clip(
 
     for start in range(0, grouped_weight.shape[0], batch_size):
         chunk = grouped_weight[start : start + batch_size]
-        chunk_fp32 = chunk.float()
-        input_fp32 = flat_input.float()
+        chunk_fp32 = chunk.float() # [co, 1, n_group, group_sz]
+        input_fp32 = flat_input.float()# [1, n_token', n_group, group_sz]
 
         org_max = chunk_fp32.abs().amax(dim=-1, keepdim=True)
         best_max = org_max.to(dtype=chunk.dtype)
@@ -64,7 +66,7 @@ def _search_linear_clip(
         org_out = (input_fp32 * chunk_fp32).sum(dim=-1)
 
         for step in range(int(max_shrink * n_grid)):
-            max_val = org_max * (1 - step / n_grid)
+            max_val = org_max * (1 - step / n_grid)# 0 -> 50%
             clipped = torch.clamp(chunk_fp32, -max_val, max_val)
             qweight = pseudo_quantize_tensor(
                 clipped.reshape(-1, group_size),

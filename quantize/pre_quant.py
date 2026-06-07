@@ -341,6 +341,7 @@ class AwqPipeline:
         forward_kwargs: Dict[str, Any],
         fp_output: torch.Tensor,
     ) -> float:
+        """pseudo_quantizes weight, calculates mse error and restore org_weight in the end."""
         backups: Dict[str, torch.Tensor] = {}
         for name, linear in linears.items():
             backups[name] = linear.weight.data.detach().clone()

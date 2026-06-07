@@ -84,7 +84,8 @@ def _search_best_scales(
     symmetric: bool,
     n_grid: int = 20,
 ) -> torch.Tensor:
-    """Grid-search channel scales by minimizing block output MSE."""
+    """Grid-search channel scales by minimizing block output MSE. 
+    Original weight will be restored at the end of this function"""
 
     def fake_quant(weight: torch.Tensor) -> torch.Tensor:
         return pseudo_quantize_tensor(
@@ -126,7 +127,7 @@ def _search_best_scales(
             linear.weight.data = fake_quant(linear.weight.data) / scales.view(1, -1)
 
         candidate = inspect_module(activations, **kwargs)
-        # ？？？
+        
         if isinstance(candidate, tuple):
             candidate = candidate[0]
 
@@ -144,6 +145,7 @@ def _search_best_scales(
 
 
 def _llama_scale_specs(layer: LlamaDecoderLayer) -> List[ScaleSpec]:
+    """different transformation patterns in LlamaDecoderLayer"""
     specs = [
         ScaleSpec(
             transform="ln_fc",
