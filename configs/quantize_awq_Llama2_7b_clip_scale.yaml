@@ -17,11 +17,11 @@ awq:
   symmetric: false
   auto_scale: true
   auto_clip: true
-  search_order: scale_clip  # scale_clip | clip_scale
+  search_order: clip_scale
   mixed_precision: fp16
   topk: 0
 
 output:
   dir: "results"
   save_quant_ckpt: true
-  quant_ckpt_name: "Llama2_7b_fake_quant"
+  quant_ckpt_name: "Llama2_7b_awq_clip_scale"

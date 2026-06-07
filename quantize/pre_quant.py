@@ -47,6 +47,7 @@ class AwqRunConfig:
     quant_ckpt_name: str
     mixed_precision: str
     topk: int
+    search_order: str
 
     @classmethod # 类方法，不是对象方法
     def from_dict(cls, cfg: Dict[str, Any]) -> AwqRunConfig:
@@ -57,6 +58,11 @@ class AwqRunConfig:
         if mixed_precision not in {"none", "fp16", "int8"}:
             raise ValueError(
                 "awq.mixed_precision must be one of: none | fp16 | int8"
+            )
+        search_order = str(awq.get("search_order", "scale_clip")).lower()
+        if search_order not in {"scale_clip", "clip_scale"}:
+            raise ValueError(
+                "awq.search_order must be one of: scale_clip | clip_scale"
             )
         return cls(
             n_bits=int(awq.get("n_bits", 4)),
@@ -73,6 +79,7 @@ class AwqRunConfig:
             quant_ckpt_name=str(output.get("quant_ckpt_name", "fake_quant_model")),
             mixed_precision=mixed_precision,
             topk=max(0, int(awq.get("topk", 0))),
+            search_order=search_order,
         )
 
 
@@ -274,6 +281,50 @@ class AwqPipeline:
         move_embed(self.model, "cpu")
         self._free_device_cache()
         return hidden, kwargs # layer 0 
+
+    def _optimize_scale_and_clip(
+        self,
+        layer: nn.Module,
+        input_feat: Dict[str, torch.Tensor],
+        forward_kwargs: Dict[str, Any],
+    ) -> Tuple[List[ScaleRecord], List[ClipRecord]]:
+        scale_records: List[ScaleRecord] = []
+        clip_records: List[ClipRecord] = []
+
+        def run_scale() -> None:
+            nonlocal scale_records
+            if not self.run_cfg.auto_scale:
+                return
+            scale_records = optimize_decoder_layer_scales(
+                layer=layer,
+                input_feat=input_feat,
+                layer_kwargs=forward_kwargs,
+                n_bits=self.run_cfg.n_bits,
+                group_size=self.run_cfg.group_size,
+                symmetric=self.run_cfg.symmetric,
+            )
+
+        def run_clip() -> None:
+            nonlocal clip_records
+            if not self.run_cfg.auto_clip:
+                return
+            clip_records = optimize_decoder_layer_clips(
+                layer=layer,
+                input_feat=input_feat,
+                n_bits=self.run_cfg.n_bits,
+                group_size=self.run_cfg.group_size,
+                symmetric=self.run_cfg.symmetric,
+                device=self.device,
+            )
+
+        if self.run_cfg.search_order == "clip_scale":
+            run_clip()
+            run_scale()
+        else:
+            run_scale()
+            run_clip()
+
+        return scale_records, clip_records
     
     def _process_layer(
         self,
@@ -291,28 +342,9 @@ class AwqPipeline:
             _extract_hidden_states(layer(layer_input, **forward_kwargs))
 
         input_feat = recorder.consolidated()
-        scale_records: List[ScaleRecord] = []
-        clip_records: List[ClipRecord] = []
-
-        if self.run_cfg.auto_scale:
-            scale_records = optimize_decoder_layer_scales(
-                layer=layer,
-                input_feat=input_feat,
-                layer_kwargs=forward_kwargs,
-                n_bits=self.run_cfg.n_bits,
-                group_size=self.run_cfg.group_size,
-                symmetric=self.run_cfg.symmetric,
-            )
-
-        if self.run_cfg.auto_clip:
-            clip_records = optimize_decoder_layer_clips(
-                layer=layer,
-                input_feat=input_feat,
-                n_bits=self.run_cfg.n_bits,
-                group_size=self.run_cfg.group_size,
-                symmetric=self.run_cfg.symmetric,
-                device=self.device,
-            )
+        scale_records, clip_records = self._optimize_scale_and_clip(
+            layer, input_feat, forward_kwargs
+        )
 
         # scale/clip search may leave submodules on CPU; re-sync before forward.
         layer = to_accelerator(layer, self.cfg)
@@ -458,7 +490,11 @@ class AwqPipeline:
         hidden, layer_kwargs = self._prefill_hidden_states(calib_batch)
         del calib_batch
 
-        awq_results: Dict[str, Any] = {"layers": []}
+        awq_results: Dict[str, Any] = {
+            "search_order": self.run_cfg.search_order,
+            "layers": [],
+        }
+        print(f"[myawq] AWQ search order: {self.run_cfg.search_order}")
         layers = get_blocks(self.model)
 
         for layer_idx in tqdm.tqdm(range(len(layers)), desc="Running AWQ"):
@@ -491,10 +527,21 @@ def run_awq(
 @torch.no_grad()
 def apply_awq(model: PreTrainedModel, awq_results: Dict[str, Any]) -> None:
     """Replay saved scale/clip records layer by layer."""
+    search_order = str(awq_results.get("search_order", "scale_clip")).lower()
+    clip_first = search_order == "clip_scale"
     layers = get_blocks(model)
     for entry in awq_results.get("layers", []):
         layer = layers[entry["index"]]
-        if entry.get("scales"):
-            apply_scale_records(layer, entry["scales"])
-        if entry.get("clips"):
-            apply_clip_records(layer, entry["clips"], device=torch.device("cpu"))
+        scales = entry.get("scales") or []
+        clips = entry.get("clips") or []
+
+        if clip_first:
+            if clips:
+                apply_clip_records(layer, clips, device=torch.device("cpu"))
+            if scales:
+                apply_scale_records(layer, scales)
+        else:
+            if scales:
+                apply_scale_records(layer, scales)
+            if clips:
+                apply_clip_records(layer, clips, device=torch.device("cpu"))
