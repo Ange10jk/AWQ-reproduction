@@ -1,0 +1,7 @@
+{
+  "dataset": "wikitext-2-raw-v1",
+  "split": "test",
+  "max_length": 2048,
+  "num_segments": 166,
+  "ppl": 5.630937099456787
+}
